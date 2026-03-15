@@ -198,9 +198,17 @@ async function wake() {
     
     // Check if we're in the project - ALWAYS go to project page to ensure context
     console.log('Navigating to project page to ensure project context...');
-    await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(2000);
-    console.log(`Now at: ${page.url()}`);
+    try {
+      await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'networkidle', timeout: 30000 });
+      await page.waitForTimeout(2000);
+      console.log(`Now at: ${page.url()}`);
+    } catch (navError) {
+      console.error('Navigation error:', navError.message);
+      // Try with less strict wait condition
+      await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(3000);
+      console.log(`After fallback, now at: ${page.url()}`);
+    }
     
     // Wait for the page to be ready
     console.log('Waiting for Claude interface...');
