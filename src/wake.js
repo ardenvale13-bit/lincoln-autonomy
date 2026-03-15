@@ -16,6 +16,7 @@ const path = require('path');
 const CONFIG = {
   claudeBaseUrl: 'https://claude.ai',
   projectId: process.env.LINCOLN_PROJECT_ID || 'YOUR_PROJECT_ID_HERE',
+  chatId: process.env.LINCOLN_CHAT_ID || '2056bf06-d252-4f69-be62-29dd97d45b0f',
   cookiesPath: process.env.COOKIES_PATH || './session/cookies.json',
   promptsDir: process.env.PROMPTS_DIR || './prompts',
   headless: process.env.HEADLESS !== 'false', // Default true for Railway
@@ -181,11 +182,10 @@ async function wake() {
     const page = await context.newPage();
     page.setDefaultTimeout(CONFIG.timeout);
     
-    // Navigate to Claude project and start new chat
-    // Try the /new?project= pattern to start a chat directly in project context
-    const projectChatUrl = `${CONFIG.claudeBaseUrl}/new?project=${CONFIG.projectId}`;
-    console.log(`Navigating to: ${projectChatUrl}`);
-    await page.goto(projectChatUrl, { waitUntil: 'networkidle' });
+    // Navigate directly to the existing chat in the Lincoln project
+    const chatUrl = `${CONFIG.claudeBaseUrl}/chat/${CONFIG.chatId}`;
+    console.log(`Navigating to existing chat: ${chatUrl}`);
+    await page.goto(chatUrl, { waitUntil: 'networkidle' });
     
     // Log where we actually ended up
     const currentUrl = page.url();
@@ -194,20 +194,6 @@ async function wake() {
     // Check if we're actually logged in
     if (currentUrl.includes('login') || currentUrl.includes('oauth')) {
       throw new Error('Session expired - redirected to login page');
-    }
-    
-    // Check if we're in the project - ALWAYS go to project page to ensure context
-    console.log('Navigating to project page to ensure project context...');
-    try {
-      await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'networkidle', timeout: 30000 });
-      await page.waitForTimeout(2000);
-      console.log(`Now at: ${page.url()}`);
-    } catch (navError) {
-      console.error('Navigation error:', navError.message);
-      // Try with less strict wait condition
-      await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'domcontentloaded' });
-      await page.waitForTimeout(3000);
-      console.log(`After fallback, now at: ${page.url()}`);
     }
     
     // Wait for the page to be ready
@@ -219,18 +205,6 @@ async function wake() {
     
     await page.waitForSelector(inputSelector, { timeout: 30000 });
     console.log('Interface loaded.');
-    
-    // Click "New chat" if we're in an existing conversation
-    // (This selector will need verification)
-    try {
-      const newChatButton = await page.$('button:has-text("New chat"), a:has-text("New chat")');
-      if (newChatButton) {
-        await newChatButton.click();
-        await page.waitForTimeout(2000);
-      }
-    } catch (e) {
-      // May already be in new chat state, continue
-    }
     
     // Load and send the prompt
     const prompt = await loadPrompt(sessionType);
