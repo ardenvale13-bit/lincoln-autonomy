@@ -1,7 +1,7 @@
 # Lincoln Autonomy Service
 # Playwright + Chromium for headless Claude.ai automation
 
-FROM mcr.microsoft.com/playwright:v1.42.0-jammy
+FROM mcr.microsoft.com/playwright:v1.58.2-jammy
 
 WORKDIR /app
 
