@@ -38,13 +38,45 @@ function getSessionType() {
   return 'evening';
 }
 
+// Sanitize cookies for Playwright compatibility
+function sanitizeCookies(cookies) {
+  return cookies.map(cookie => {
+    const sanitized = { ...cookie };
+    
+    // Fix sameSite - Playwright requires exactly: Strict, Lax, or None
+    if (sanitized.sameSite) {
+      const sameSite = sanitized.sameSite.toLowerCase();
+      if (sameSite === 'strict') sanitized.sameSite = 'Strict';
+      else if (sameSite === 'lax') sanitized.sameSite = 'Lax';
+      else if (sameSite === 'none' || sameSite === 'no_restriction') sanitized.sameSite = 'None';
+      else sanitized.sameSite = 'Lax'; // Default fallback
+    } else {
+      sanitized.sameSite = 'Lax'; // Default if missing
+    }
+    
+    // Ensure domain starts with dot for proper matching
+    if (sanitized.domain && !sanitized.domain.startsWith('.')) {
+      sanitized.domain = '.' + sanitized.domain;
+    }
+    
+    // Remove any fields Playwright doesn't understand
+    delete sanitized.hostOnly;
+    delete sanitized.session;
+    delete sanitized.storeId;
+    delete sanitized.id;
+    
+    return sanitized;
+  });
+}
+
 // Load session cookies from ENV or file
 async function loadCookies() {
   // First try environment variable (recommended for Railway)
   if (process.env.CLAUDE_COOKIES) {
     try {
       console.log('Loading cookies from CLAUDE_COOKIES env var...');
-      return JSON.parse(process.env.CLAUDE_COOKIES);
+      const rawCookies = JSON.parse(process.env.CLAUDE_COOKIES);
+      return sanitizeCookies(rawCookies);
     } catch (error) {
       console.error('Failed to parse CLAUDE_COOKIES env var:', error.message);
       throw new Error('CLAUDE_COOKIES environment variable contains invalid JSON.');
@@ -55,7 +87,8 @@ async function loadCookies() {
   try {
     const cookiesPath = path.resolve(CONFIG.cookiesPath);
     const cookiesData = await fs.readFile(cookiesPath, 'utf-8');
-    return JSON.parse(cookiesData);
+    const rawCookies = JSON.parse(cookiesData);
+    return sanitizeCookies(rawCookies);
   } catch (error) {
     console.error('Failed to load cookies:', error.message);
     throw new Error('No valid session cookies found. Set CLAUDE_COOKIES env var or provide cookies.json file.');
