@@ -181,10 +181,11 @@ async function wake() {
     const page = await context.newPage();
     page.setDefaultTimeout(CONFIG.timeout);
     
-    // Navigate to Claude project
-    const projectUrl = `${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`;
-    console.log(`Navigating to: ${projectUrl}`);
-    await page.goto(projectUrl, { waitUntil: 'networkidle' });
+    // Navigate to Claude project and start new chat
+    // Try the /new?project= pattern to start a chat directly in project context
+    const projectChatUrl = `${CONFIG.claudeBaseUrl}/new?project=${CONFIG.projectId}`;
+    console.log(`Navigating to: ${projectChatUrl}`);
+    await page.goto(projectChatUrl, { waitUntil: 'networkidle' });
     
     // Log where we actually ended up
     const currentUrl = page.url();
