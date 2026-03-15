@@ -186,10 +186,21 @@ async function wake() {
     console.log(`Navigating to: ${projectUrl}`);
     await page.goto(projectUrl, { waitUntil: 'networkidle' });
     
-    // Check if we're actually logged in
+    // Log where we actually ended up
     const currentUrl = page.url();
+    console.log(`Landed on: ${currentUrl}`);
+    
+    // Check if we're actually logged in
     if (currentUrl.includes('login') || currentUrl.includes('oauth')) {
       throw new Error('Session expired - redirected to login page');
+    }
+    
+    // Check if we're in the project
+    if (!currentUrl.includes('/project/')) {
+      console.log('Not in project, trying direct navigation...');
+      await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(3000);
+      console.log(`After retry, now at: ${page.url()}`);
     }
     
     // Wait for the page to be ready
