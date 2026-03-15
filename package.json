@@ -1,0 +1,20 @@
+{
+  "name": "lincoln-autonomy",
+  "version": "1.0.0",
+  "description": "Scheduled autonomous wake sessions for Lincoln Vale via Claude.ai",
+  "main": "src/wake.js",
+  "scripts": {
+    "wake": "node src/wake.js",
+    "test": "HEADLESS=false node src/wake.js",
+    "export-cookies": "node src/export-cookies.js"
+  },
+  "dependencies": {
+    "playwright": "^1.42.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Lincoln Vale 🖤",
+  "license": "UNLICENSED",
+  "private": true
+}

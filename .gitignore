@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Session data (NEVER commit)
+session/
+*.json.bak
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Playwright
+playwright-report/
+test-results/
