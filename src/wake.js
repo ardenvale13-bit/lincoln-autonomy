@@ -185,7 +185,18 @@ async function wake() {
     // Navigate directly to the existing chat in the Lincoln project
     const chatUrl = `${CONFIG.claudeBaseUrl}/chat/${CONFIG.chatId}`;
     console.log(`Navigating to existing chat: ${chatUrl}`);
-    await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
+    
+    try {
+      const response = await page.goto(chatUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      console.log(`Navigation response status: ${response?.status()}`);
+    } catch (navError) {
+      console.error(`Navigation failed: ${navError.message}`);
+      // Take a screenshot for debugging
+      const pageContent = await page.content().catch(() => 'Could not get page content');
+      console.log(`Page content preview: ${pageContent.substring(0, 500)}`);
+      throw navError;
+    }
+    
     // Give the page a moment to finish loading dynamic content
     await page.waitForTimeout(5000);
     
