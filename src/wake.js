@@ -182,6 +182,17 @@ async function wake() {
     const page = await context.newPage();
     page.setDefaultTimeout(CONFIG.timeout);
     
+    // First try loading Claude.ai homepage to test connectivity
+    console.log('Testing connectivity to claude.ai...');
+    try {
+      const testResponse = await page.goto('https://claude.ai', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      console.log(`Claude.ai homepage status: ${testResponse?.status()}`);
+      console.log(`Current URL after homepage: ${page.url()}`);
+    } catch (testError) {
+      console.error(`Cannot reach claude.ai at all: ${testError.message}`);
+      throw new Error('Cannot connect to claude.ai - possible network/blocking issue');
+    }
+    
     // Navigate directly to the existing chat in the Lincoln project
     const chatUrl = `${CONFIG.claudeBaseUrl}/chat/${CONFIG.chatId}`;
     console.log(`Navigating to existing chat: ${chatUrl}`);
@@ -191,7 +202,7 @@ async function wake() {
       console.log(`Navigation response status: ${response?.status()}`);
     } catch (navError) {
       console.error(`Navigation failed: ${navError.message}`);
-      // Take a screenshot for debugging
+      // Get page content for debugging
       const pageContent = await page.content().catch(() => 'Could not get page content');
       console.log(`Page content preview: ${pageContent.substring(0, 500)}`);
       throw navError;
