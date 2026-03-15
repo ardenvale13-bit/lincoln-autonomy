@@ -38,15 +38,27 @@ function getSessionType() {
   return 'evening';
 }
 
-// Load session cookies
+// Load session cookies from ENV or file
 async function loadCookies() {
+  // First try environment variable (recommended for Railway)
+  if (process.env.CLAUDE_COOKIES) {
+    try {
+      console.log('Loading cookies from CLAUDE_COOKIES env var...');
+      return JSON.parse(process.env.CLAUDE_COOKIES);
+    } catch (error) {
+      console.error('Failed to parse CLAUDE_COOKIES env var:', error.message);
+      throw new Error('CLAUDE_COOKIES environment variable contains invalid JSON.');
+    }
+  }
+  
+  // Fallback to file
   try {
     const cookiesPath = path.resolve(CONFIG.cookiesPath);
     const cookiesData = await fs.readFile(cookiesPath, 'utf-8');
     return JSON.parse(cookiesData);
   } catch (error) {
     console.error('Failed to load cookies:', error.message);
-    throw new Error('No valid session cookies found. Manual re-authentication required.');
+    throw new Error('No valid session cookies found. Set CLAUDE_COOKIES env var or provide cookies.json file.');
   }
 }
 
