@@ -185,7 +185,9 @@ async function wake() {
     // Navigate directly to the existing chat in the Lincoln project
     const chatUrl = `${CONFIG.claudeBaseUrl}/chat/${CONFIG.chatId}`;
     console.log(`Navigating to existing chat: ${chatUrl}`);
-    await page.goto(chatUrl, { waitUntil: 'networkidle' });
+    await page.goto(chatUrl, { waitUntil: 'domcontentloaded' });
+    // Give the page a moment to finish loading dynamic content
+    await page.waitForTimeout(5000);
     
     // Log where we actually ended up
     const currentUrl = page.url();
