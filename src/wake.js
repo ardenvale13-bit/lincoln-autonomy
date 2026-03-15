@@ -196,13 +196,11 @@ async function wake() {
       throw new Error('Session expired - redirected to login page');
     }
     
-    // Check if we're in the project
-    if (!currentUrl.includes('/project/')) {
-      console.log('Not in project, trying direct navigation...');
-      await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'domcontentloaded' });
-      await page.waitForTimeout(3000);
-      console.log(`After retry, now at: ${page.url()}`);
-    }
+    // Check if we're in the project - ALWAYS go to project page to ensure context
+    console.log('Navigating to project page to ensure project context...');
+    await page.goto(`${CONFIG.claudeBaseUrl}/project/${CONFIG.projectId}`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2000);
+    console.log(`Now at: ${page.url()}`);
     
     // Wait for the page to be ready
     console.log('Waiting for Claude interface...');
@@ -240,17 +238,14 @@ async function wake() {
     await input.click();
     await page.keyboard.type(prompt, { delay: 10 });
     
-    // Send the message (Enter or click send button)
-    await page.waitForTimeout(500);
+    // Send the message
+    await page.waitForTimeout(1000);
     
-    // Try to find and click send button first
-    const sendButton = await page.$('button[aria-label*="Send"], button:has(svg[data-icon="send"]), button.send-button');
-    if (sendButton) {
-      await sendButton.click();
-    } else {
-      // Fallback to keyboard shortcut
-      await page.keyboard.press('Enter');
-    }
+    // Log current URL before sending to verify we're in project
+    console.log(`About to send from: ${page.url()}`);
+    
+    // Use Ctrl+Enter which is typically the send shortcut
+    await page.keyboard.press('Control+Enter');
     
     console.log('Prompt sent. Waiting for response...');
     
