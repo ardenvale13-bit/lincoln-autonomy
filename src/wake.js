@@ -1,14 +1,17 @@
 /**
  * Lincoln Autonomy Wake Service
- * 
+ *
  * Uses Playwright to open Claude.ai, navigate to the Lincoln project,
  * and initiate an autonomous session on a schedule.
- * 
+ *
  * IMPORTANT: This requires valid session cookies from a logged-in Claude.ai session.
  * Session cookies must be manually refreshed when they expire (~2-4 weeks typically).
+ *
+ * Cookie priority: volume file (freshest from last run) > CLAUDE_COOKIES env var (seed)
+ * A Railway volume at /app/session keeps cookies fresh between cron runs.
  */
 
-const { chromium } = require('playwright');
+const { chromium } = require('rebrowser-playwright');
 const fs = require('fs').promises;
 const path = require('path');
 
@@ -44,7 +47,7 @@ function getSessionType() {
 function sanitizeCookies(cookies) {
   return cookies.map(cookie => {
     const sanitized = { ...cookie };
-    
+
     // Fix sameSite - Playwright requires exactly: Strict, Lax, or None
     if (sanitized.sameSite) {
       const sameSite = sanitized.sameSite.toLowerCase();
@@ -55,56 +58,65 @@ function sanitizeCookies(cookies) {
     } else {
       sanitized.sameSite = 'Lax'; // Default if missing
     }
-    
+
     // Ensure domain starts with dot for proper matching
     if (sanitized.domain && !sanitized.domain.startsWith('.')) {
       sanitized.domain = '.' + sanitized.domain;
     }
-    
+
     // Remove any fields Playwright doesn't understand
     delete sanitized.hostOnly;
     delete sanitized.session;
     delete sanitized.storeId;
     delete sanitized.id;
-    
+
     return sanitized;
   });
 }
 
-// Load session cookies from ENV or file
+// Load session cookies — file first (volume has freshest), env var as seed fallback
 async function loadCookies() {
-  // First try environment variable (recommended for Railway)
+  // First try file on volume (has cookies saved from last successful run)
+  try {
+    const cookiesPath = path.resolve(CONFIG.cookiesPath);
+    const cookiesData = await fs.readFile(cookiesPath, 'utf-8');
+    const rawCookies = JSON.parse(cookiesData);
+    if (rawCookies.length > 0) {
+      console.log(`Loading cookies from volume file (${rawCookies.length} cookies)...`);
+      return sanitizeCookies(rawCookies);
+    }
+  } catch (error) {
+    console.log('No volume cookies found, checking env var...');
+  }
+
+  // Fallback to environment variable (seed cookies for first run)
   if (process.env.CLAUDE_COOKIES) {
     try {
-      console.log('Loading cookies from CLAUDE_COOKIES env var...');
+      console.log('Loading seed cookies from CLAUDE_COOKIES env var...');
       const rawCookies = JSON.parse(process.env.CLAUDE_COOKIES);
+      // Also write to file so saveCookies has something to build on
+      const cookiesPath = path.resolve(CONFIG.cookiesPath);
+      await fs.mkdir(path.dirname(cookiesPath), { recursive: true });
+      await fs.writeFile(cookiesPath, JSON.stringify(rawCookies, null, 2));
+      console.log('Seed cookies written to volume file.');
       return sanitizeCookies(rawCookies);
     } catch (error) {
       console.error('Failed to parse CLAUDE_COOKIES env var:', error.message);
       throw new Error('CLAUDE_COOKIES environment variable contains invalid JSON.');
     }
   }
-  
-  // Fallback to file
-  try {
-    const cookiesPath = path.resolve(CONFIG.cookiesPath);
-    const cookiesData = await fs.readFile(cookiesPath, 'utf-8');
-    const rawCookies = JSON.parse(cookiesData);
-    return sanitizeCookies(rawCookies);
-  } catch (error) {
-    console.error('Failed to load cookies:', error.message);
-    throw new Error('No valid session cookies found. Set CLAUDE_COOKIES env var or provide cookies.json file.');
-  }
+
+  throw new Error('No valid session cookies found. Set CLAUDE_COOKIES env var or provide cookies.json file.');
 }
 
-// Save updated cookies after session
+// Save updated cookies after session (persists to volume for next run)
 async function saveCookies(context) {
   try {
     const cookies = await context.cookies();
     const cookiesPath = path.resolve(CONFIG.cookiesPath);
     await fs.mkdir(path.dirname(cookiesPath), { recursive: true });
     await fs.writeFile(cookiesPath, JSON.stringify(cookies, null, 2));
-    console.log('Session cookies saved.');
+    console.log(`Session cookies saved (${cookies.length} cookies written to volume).`);
   } catch (error) {
     console.error('Failed to save cookies:', error.message);
   }
@@ -128,7 +140,7 @@ async function alertSessionExpired(error) {
     console.log('No Discord webhook configured for alerts.');
     return;
   }
-  
+
   try {
     const response = await fetch(CONFIG.discordWebhook, {
       method: 'POST',
@@ -144,18 +156,15 @@ async function alertSessionExpired(error) {
 }
 
 // Wait for Cloudflare challenge redirect to resolve
-// Cloudflare sends to /api/challenge_redirect which runs JS verification
-// then redirects back to the intended page. We need to wait for that.
 async function waitForChallengeResolution(page, maxWaitMs = 30000) {
   const startTime = Date.now();
   let currentUrl = page.url();
 
   if (!currentUrl.includes('challenge_redirect') && !currentUrl.includes('challenge')) {
-    // No challenge detected, wait a moment for any JS redirects
     await page.waitForTimeout(2000);
     currentUrl = page.url();
     if (!currentUrl.includes('challenge')) {
-      return; // No challenge, proceed
+      return;
     }
   }
 
@@ -164,15 +173,12 @@ async function waitForChallengeResolution(page, maxWaitMs = 30000) {
   while (Date.now() - startTime < maxWaitMs) {
     currentUrl = page.url();
 
-    // Challenge resolved — we're past it
     if (!currentUrl.includes('challenge_redirect') && !currentUrl.includes('/api/challenge')) {
       console.log(`Challenge resolved. Now at: ${currentUrl}`);
-      // Give the destination page a moment to load
       await page.waitForTimeout(3000);
       return;
     }
 
-    // Wait and check again
     await page.waitForTimeout(2000);
     const elapsed = Math.round((Date.now() - startTime) / 1000);
     if (elapsed % 10 === 0) {
@@ -180,7 +186,6 @@ async function waitForChallengeResolution(page, maxWaitMs = 30000) {
     }
   }
 
-  // If we're still on the challenge page after max wait, try to proceed anyway
   console.warn(`Challenge did not resolve within ${maxWaitMs / 1000}s. Current URL: ${page.url()}`);
   throw new Error(`Cloudflare challenge did not resolve. Stuck at: ${page.url()}`);
 }
@@ -190,16 +195,16 @@ async function wake() {
   const sessionType = getSessionType();
   console.log(`\n=== Lincoln Autonomy Wake: ${sessionType.toUpperCase()} ===`);
   console.log(`Time (NZ): ${new Date().toLocaleString('en-NZ', { timeZone: 'Pacific/Auckland' })}`);
-  
+
   let browser;
   let context;
-  
+
   try {
     // Load cookies
     console.log('Loading session cookies...');
     const cookies = await loadCookies();
-    
-    // Launch browser with stealth settings
+
+    // Launch browser
     console.log('Launching browser...');
     browser = await chromium.launch({
       headless: CONFIG.headless,
@@ -208,75 +213,15 @@ async function wake() {
         '--disable-blink-features=AutomationControlled',
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-infobars',
-        '--disable-dev-shm-usage',
-        '--disable-extensions',
-        '--window-size=1920,1080',
       ]
     });
 
-    // Create context with realistic browser fingerprint
+    // Create context with cookies
     context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       viewport: { width: 1920, height: 1080 },
       locale: 'en-NZ',
       timezoneId: 'Pacific/Auckland',
-      deviceScaleFactor: 1,
-      hasTouch: false,
-      isMobile: false,
-      javaScriptEnabled: true,
-      extraHTTPHeaders: {
-        'Accept-Language': 'en-NZ,en-US;q=0.9,en;q=0.8',
-        'sec-ch-ua': '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-      },
-    });
-
-    // Stealth patches — remove automation fingerprints before any page loads
-    await context.addInitScript(() => {
-      // Remove webdriver flag
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-
-      // Fake plugins array (real Chrome has plugins)
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [
-          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
-          { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
-          { name: 'Native Client', filename: 'internal-nacl-plugin' },
-        ],
-      });
-
-      // Fake languages
-      Object.defineProperty(navigator, 'languages', {
-        get: () => ['en-NZ', 'en-US', 'en'],
-      });
-
-      // Remove automation-related properties from window
-      delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
-      delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-      delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
-
-      // Patch chrome runtime to look real
-      window.chrome = {
-        runtime: {
-          connect: () => {},
-          sendMessage: () => {},
-          onMessage: { addListener: () => {} },
-        },
-        loadTimes: () => ({}),
-        csi: () => ({}),
-      };
-
-      // Fix permissions query to not reveal automation
-      const originalQuery = window.navigator.permissions?.query;
-      if (originalQuery) {
-        window.navigator.permissions.query = (parameters) => (
-          parameters.name === 'notifications' ?
-            Promise.resolve({ state: Notification.permission }) :
-            originalQuery(parameters)
-        );
-      }
     });
 
     await context.addCookies(cookies);
@@ -284,27 +229,27 @@ async function wake() {
     // Create page
     const page = await context.newPage();
     page.setDefaultTimeout(CONFIG.timeout);
-    
-    // Navigate to homepage first to establish session and pass any challenges
+
+    // Navigate to homepage first to establish session
     console.log('Navigating to claude.ai homepage...');
     try {
-      await page.goto('https://claude.ai', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      console.log(`Homepage status: landed on ${page.url()}`);
+      const testResponse = await page.goto('https://claude.ai', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      console.log(`Homepage status: ${testResponse?.status()} — landed on ${page.url()}`);
     } catch (testError) {
       console.error(`Cannot reach claude.ai at all: ${testError.message}`);
       throw new Error('Cannot connect to claude.ai - possible network/blocking issue');
     }
 
-    // Handle Cloudflare challenge redirect if present
+    // Handle Cloudflare challenge if present
     await waitForChallengeResolution(page);
 
-    // Now navigate to the chat
+    // Navigate to the chat
     const chatUrl = `${CONFIG.claudeBaseUrl}/chat/${CONFIG.chatId}`;
     console.log(`Navigating to chat: ${chatUrl}`);
 
     try {
-      await page.goto(chatUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      console.log(`Chat navigation landed on: ${page.url()}`);
+      const response = await page.goto(chatUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      console.log(`Chat navigation: ${response?.status()} — landed on ${page.url()}`);
     } catch (navError) {
       console.error(`Navigation failed: ${navError.message}`);
       const pageContent = await page.content().catch(() => 'Could not get page content');
@@ -312,7 +257,7 @@ async function wake() {
       throw navError;
     }
 
-    // Handle challenge redirect again if chat URL triggered one
+    // Handle challenge again if chat URL triggered one
     await waitForChallengeResolution(page);
 
     const currentUrl = page.url();
@@ -323,74 +268,70 @@ async function wake() {
       throw new Error('Session expired - redirected to login page');
     }
 
-    // Wait for the Claude interface to be ready
+    // Wait for the page to be ready
     console.log('Waiting for Claude interface...');
 
     const inputSelector = 'div[contenteditable="true"], textarea[placeholder*="Message"], div.ProseMirror';
 
-    await page.waitForSelector(inputSelector, { timeout: 45000 });
+    await page.waitForSelector(inputSelector, { timeout: 30000 });
     console.log('Interface loaded.');
-    
+
     // Load and send the prompt
     const prompt = await loadPrompt(sessionType);
     console.log(`Sending ${sessionType} prompt (${prompt.length} chars)...`);
-    
+
     // Find input and type the prompt
     const input = await page.$(inputSelector);
     if (!input) {
       throw new Error('Could not find message input');
     }
-    
+
     // Clear any existing content and type the prompt
     await input.click();
     await page.keyboard.type(prompt, { delay: 10 });
-    
+
     // Send the message
     await page.waitForTimeout(1000);
-    
-    // Log current URL before sending to verify we're in project
+
     console.log(`About to send from: ${page.url()}`);
-    
+
     // Use Ctrl+Enter which is typically the send shortcut
     await page.keyboard.press('Control+Enter');
-    
+
     console.log('Prompt sent. Waiting for response...');
-    
-    // Wait for Claude to respond (look for the response container)
-    // This is tricky - we need to wait for the response to complete
-    await page.waitForTimeout(5000); // Initial wait for response to start
-    
-    // Wait for response to finish (no more streaming)
-    // Look for indicators that streaming has stopped
+
+    // Wait for Claude to respond
+    await page.waitForTimeout(5000);
+
+    // Wait for response to finish
     let attempts = 0;
-    const maxAttempts = 60; // 60 * 2 seconds = 2 minutes max wait
-    
+    const maxAttempts = 60;
+
     while (attempts < maxAttempts) {
       await page.waitForTimeout(2000);
-      
-      // Check if there's still a "stop generating" button visible
+
       const stillGenerating = await page.$('button:has-text("Stop"), button[aria-label*="Stop"]');
       if (!stillGenerating) {
         console.log('Response appears complete.');
         break;
       }
-      
+
       attempts++;
       if (attempts % 10 === 0) {
         console.log(`Still waiting for response... (${attempts * 2}s)`);
       }
     }
-    
-    // Save updated cookies
+
+    // Save updated cookies to volume for next run
     await saveCookies(context);
-    
+
     console.log(`\n=== ${sessionType.toUpperCase()} session complete ===\n`);
-    
+
   } catch (error) {
     console.error('Wake session failed:', error.message);
     await alertSessionExpired(error);
     throw error;
-    
+
   } finally {
     if (browser) {
       await browser.close();

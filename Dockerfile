@@ -1,7 +1,7 @@
 # Lincoln Autonomy Service
-# Playwright + Chromium for headless Claude.ai automation
+# rebrowser-playwright + Chromium for headless Claude.ai automation
 
-FROM mcr.microsoft.com/playwright:v1.58.2-jammy
+FROM mcr.microsoft.com/playwright:v1.49.1-jammy
 
 WORKDIR /app
 
@@ -10,6 +10,9 @@ COPY package*.json ./
 
 # Install dependencies
 RUN npm ci --only=production
+
+# Install rebrowser-playwright browsers
+RUN npx rebrowser-playwright install chromium
 
 # Copy application code
 COPY . .
