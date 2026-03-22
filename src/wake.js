@@ -156,7 +156,8 @@ async function alertSessionExpired(error) {
 }
 
 // Wait for Cloudflare challenge redirect to resolve
-async function waitForChallengeResolution(page, maxWaitMs = 30000) {
+// Handles both passive JS challenges and interactive Turnstile widgets
+async function waitForChallengeResolution(page, maxWaitMs = 60000) {
   const startTime = Date.now();
   let currentUrl = page.url();
 
@@ -168,13 +169,101 @@ async function waitForChallengeResolution(page, maxWaitMs = 30000) {
     }
   }
 
-  console.log('Cloudflare challenge detected, waiting for resolution...');
+  console.log('Cloudflare challenge detected, attempting to resolve...');
 
+  // Wait for the challenge page to fully load
+  await page.waitForTimeout(3000);
+
+  // Debug: dump page info
+  try {
+    const pageTitle = await page.title();
+    console.log(`Challenge page title: "${pageTitle}"`);
+    const bodyText = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || 'empty');
+    console.log(`Challenge page text: ${bodyText}`);
+  } catch (e) {
+    console.log('Could not read challenge page content');
+  }
+
+  // Take a debug screenshot and save to volume
+  try {
+    await page.screenshot({ path: './session/challenge-debug.png', fullPage: true });
+    console.log('Debug screenshot saved to ./session/challenge-debug.png');
+  } catch (e) {
+    console.log('Could not save debug screenshot');
+  }
+
+  // Try to find and interact with Turnstile checkbox
+  let turnstileAttempted = false;
+  const turnstileSelectors = [
+    'iframe[src*="challenges.cloudflare.com"]',
+    'iframe[src*="turnstile"]',
+    '#turnstile-wrapper iframe',
+    'iframe[title*="challenge"]',
+  ];
+
+  for (const selector of turnstileSelectors) {
+    try {
+      const iframe = await page.$(selector);
+      if (iframe) {
+        console.log(`Found Turnstile iframe: ${selector}`);
+        const frame = await iframe.contentFrame();
+        if (frame) {
+          // Look for the checkbox inside the iframe
+          const checkbox = await frame.$('input[type="checkbox"], .cb-lb, [role="checkbox"]');
+          if (checkbox) {
+            console.log('Found Turnstile checkbox, clicking...');
+            await checkbox.click();
+            turnstileAttempted = true;
+            break;
+          }
+          // Some Turnstile widgets just need a click anywhere in the frame body
+          const body = await frame.$('body');
+          if (body) {
+            console.log('Clicking Turnstile iframe body...');
+            await body.click();
+            turnstileAttempted = true;
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      console.log(`Turnstile selector ${selector} failed: ${e.message}`);
+    }
+  }
+
+  // Also try clicking any visible verify/check buttons on the main page
+  if (!turnstileAttempted) {
+    const buttonSelectors = [
+      'button:has-text("Verify")',
+      'button:has-text("verify")',
+      'input[type="button"][value*="Verify"]',
+      '#challenge-stage input',
+      '.challenge-form button',
+    ];
+    for (const selector of buttonSelectors) {
+      try {
+        const btn = await page.$(selector);
+        if (btn) {
+          console.log(`Found challenge button: ${selector}, clicking...`);
+          await btn.click();
+          turnstileAttempted = true;
+          break;
+        }
+      } catch (e) { /* continue */ }
+    }
+  }
+
+  if (turnstileAttempted) {
+    console.log('Turnstile interaction attempted, waiting for redirect...');
+    await page.waitForTimeout(5000);
+  }
+
+  // Now wait for resolution
   while (Date.now() - startTime < maxWaitMs) {
     currentUrl = page.url();
 
     if (!currentUrl.includes('challenge_redirect') && !currentUrl.includes('/api/challenge')) {
-      console.log(`Challenge resolved. Now at: ${currentUrl}`);
+      console.log(`Challenge resolved! Now at: ${currentUrl}`);
       await page.waitForTimeout(3000);
       return;
     }
@@ -183,8 +272,19 @@ async function waitForChallengeResolution(page, maxWaitMs = 30000) {
     const elapsed = Math.round((Date.now() - startTime) / 1000);
     if (elapsed % 10 === 0) {
       console.log(`Still waiting for challenge... (${elapsed}s) URL: ${currentUrl}`);
+
+      // Take periodic screenshots for debugging
+      try {
+        await page.screenshot({ path: `./session/challenge-${elapsed}s.png`, fullPage: true });
+      } catch (e) { /* ignore */ }
     }
   }
+
+  // Final debug screenshot before failing
+  try {
+    await page.screenshot({ path: './session/challenge-final.png', fullPage: true });
+    console.log('Final debug screenshot saved.');
+  } catch (e) { /* ignore */ }
 
   console.warn(`Challenge did not resolve within ${maxWaitMs / 1000}s. Current URL: ${page.url()}`);
   throw new Error(`Cloudflare challenge did not resolve. Stuck at: ${page.url()}`);
