@@ -11,8 +11,9 @@ COPY package*.json ./
 # Install dependencies (npm install to generate fresh lock file)
 RUN npm install --omit=dev
 
-# Install rebrowser-playwright browsers
-RUN npx rebrowser-playwright install chromium
+# Skip browser install — base image already has Chromium
+# Tell Playwright to use the system-installed browsers
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Copy application code
 COPY . .
