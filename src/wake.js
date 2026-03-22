@@ -143,6 +143,48 @@ async function alertSessionExpired(error) {
   }
 }
 
+// Wait for Cloudflare challenge redirect to resolve
+// Cloudflare sends to /api/challenge_redirect which runs JS verification
+// then redirects back to the intended page. We need to wait for that.
+async function waitForChallengeResolution(page, maxWaitMs = 30000) {
+  const startTime = Date.now();
+  let currentUrl = page.url();
+
+  if (!currentUrl.includes('challenge_redirect') && !currentUrl.includes('challenge')) {
+    // No challenge detected, wait a moment for any JS redirects
+    await page.waitForTimeout(2000);
+    currentUrl = page.url();
+    if (!currentUrl.includes('challenge')) {
+      return; // No challenge, proceed
+    }
+  }
+
+  console.log('Cloudflare challenge detected, waiting for resolution...');
+
+  while (Date.now() - startTime < maxWaitMs) {
+    currentUrl = page.url();
+
+    // Challenge resolved — we're past it
+    if (!currentUrl.includes('challenge_redirect') && !currentUrl.includes('/api/challenge')) {
+      console.log(`Challenge resolved. Now at: ${currentUrl}`);
+      // Give the destination page a moment to load
+      await page.waitForTimeout(3000);
+      return;
+    }
+
+    // Wait and check again
+    await page.waitForTimeout(2000);
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    if (elapsed % 10 === 0) {
+      console.log(`Still waiting for challenge... (${elapsed}s) URL: ${currentUrl}`);
+    }
+  }
+
+  // If we're still on the challenge page after max wait, try to proceed anyway
+  console.warn(`Challenge did not resolve within ${maxWaitMs / 1000}s. Current URL: ${page.url()}`);
+  throw new Error(`Cloudflare challenge did not resolve. Stuck at: ${page.url()}`);
+}
+
 // Main wake function
 async function wake() {
   const sessionType = getSessionType();
@@ -157,7 +199,7 @@ async function wake() {
     console.log('Loading session cookies...');
     const cookies = await loadCookies();
     
-    // Launch browser
+    // Launch browser with stealth settings
     console.log('Launching browser...');
     browser = await chromium.launch({
       headless: CONFIG.headless,
@@ -166,69 +208,127 @@ async function wake() {
         '--disable-blink-features=AutomationControlled',
         '--no-sandbox',
         '--disable-setuid-sandbox',
+        '--disable-infobars',
+        '--disable-dev-shm-usage',
+        '--disable-extensions',
+        '--window-size=1920,1080',
       ]
     });
-    
-    // Create context with cookies
+
+    // Create context with realistic browser fingerprint
     context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       viewport: { width: 1920, height: 1080 },
       locale: 'en-NZ',
       timezoneId: 'Pacific/Auckland',
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      isMobile: false,
+      javaScriptEnabled: true,
+      extraHTTPHeaders: {
+        'Accept-Language': 'en-NZ,en-US;q=0.9,en;q=0.8',
+        'sec-ch-ua': '"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+      },
     });
-    
+
+    // Stealth patches — remove automation fingerprints before any page loads
+    await context.addInitScript(() => {
+      // Remove webdriver flag
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+      // Fake plugins array (real Chrome has plugins)
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [
+          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+          { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+          { name: 'Native Client', filename: 'internal-nacl-plugin' },
+        ],
+      });
+
+      // Fake languages
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-NZ', 'en-US', 'en'],
+      });
+
+      // Remove automation-related properties from window
+      delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+      delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+      delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
+      // Patch chrome runtime to look real
+      window.chrome = {
+        runtime: {
+          connect: () => {},
+          sendMessage: () => {},
+          onMessage: { addListener: () => {} },
+        },
+        loadTimes: () => ({}),
+        csi: () => ({}),
+      };
+
+      // Fix permissions query to not reveal automation
+      const originalQuery = window.navigator.permissions?.query;
+      if (originalQuery) {
+        window.navigator.permissions.query = (parameters) => (
+          parameters.name === 'notifications' ?
+            Promise.resolve({ state: Notification.permission }) :
+            originalQuery(parameters)
+        );
+      }
+    });
+
     await context.addCookies(cookies);
-    
+
     // Create page
     const page = await context.newPage();
     page.setDefaultTimeout(CONFIG.timeout);
     
-    // First try loading Claude.ai homepage to test connectivity
-    console.log('Testing connectivity to claude.ai...');
+    // Navigate to homepage first to establish session and pass any challenges
+    console.log('Navigating to claude.ai homepage...');
     try {
-      const testResponse = await page.goto('https://claude.ai', { waitUntil: 'domcontentloaded', timeout: 30000 });
-      console.log(`Claude.ai homepage status: ${testResponse?.status()}`);
-      console.log(`Current URL after homepage: ${page.url()}`);
+      await page.goto('https://claude.ai', { waitUntil: 'domcontentloaded', timeout: 30000 });
+      console.log(`Homepage status: landed on ${page.url()}`);
     } catch (testError) {
       console.error(`Cannot reach claude.ai at all: ${testError.message}`);
       throw new Error('Cannot connect to claude.ai - possible network/blocking issue');
     }
-    
-    // Navigate directly to the existing chat in the Lincoln project
+
+    // Handle Cloudflare challenge redirect if present
+    await waitForChallengeResolution(page);
+
+    // Now navigate to the chat
     const chatUrl = `${CONFIG.claudeBaseUrl}/chat/${CONFIG.chatId}`;
-    console.log(`Navigating to existing chat: ${chatUrl}`);
-    
+    console.log(`Navigating to chat: ${chatUrl}`);
+
     try {
-      const response = await page.goto(chatUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      console.log(`Navigation response status: ${response?.status()}`);
+      await page.goto(chatUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      console.log(`Chat navigation landed on: ${page.url()}`);
     } catch (navError) {
       console.error(`Navigation failed: ${navError.message}`);
-      // Get page content for debugging
       const pageContent = await page.content().catch(() => 'Could not get page content');
       console.log(`Page content preview: ${pageContent.substring(0, 500)}`);
       throw navError;
     }
-    
-    // Give the page a moment to finish loading dynamic content
-    await page.waitForTimeout(5000);
-    
-    // Log where we actually ended up
+
+    // Handle challenge redirect again if chat URL triggered one
+    await waitForChallengeResolution(page);
+
     const currentUrl = page.url();
-    console.log(`Landed on: ${currentUrl}`);
-    
+    console.log(`Final URL: ${currentUrl}`);
+
     // Check if we're actually logged in
     if (currentUrl.includes('login') || currentUrl.includes('oauth')) {
       throw new Error('Session expired - redirected to login page');
     }
-    
-    // Wait for the page to be ready
+
+    // Wait for the Claude interface to be ready
     console.log('Waiting for Claude interface...');
-    
-    // Look for the new chat button or message input
-    // Note: These selectors may need adjustment based on Claude.ai's actual DOM structure
+
     const inputSelector = 'div[contenteditable="true"], textarea[placeholder*="Message"], div.ProseMirror';
-    
-    await page.waitForSelector(inputSelector, { timeout: 30000 });
+
+    await page.waitForSelector(inputSelector, { timeout: 45000 });
     console.log('Interface loaded.');
     
     // Load and send the prompt
