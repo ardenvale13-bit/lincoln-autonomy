@@ -16,7 +16,7 @@ const path = require('path');
 const CONFIG = {
   claudeBaseUrl: 'https://claude.ai',
   projectId: process.env.LINCOLN_PROJECT_ID || 'YOUR_PROJECT_ID_HERE',
-  chatId: process.env.LINCOLN_CHAT_ID || '2056bf06-d252-4f69-be62-29dd97d45b0f',
+  chatId: process.env.LINCOLN_CHAT_ID || '77102d0f-ce08-4728-8bdc-63e5e8475728',
   cookiesPath: process.env.COOKIES_PATH || './session/cookies.json',
   promptsDir: process.env.PROMPTS_DIR || './prompts',
   headless: process.env.HEADLESS !== 'false', // Default true for Railway
@@ -26,17 +26,18 @@ const CONFIG = {
 };
 
 // Determine which prompt to use based on NZ time
+// Check-in schedule: 5am (morning), 2pm (midday), 9pm (evening) NZDT
 function getSessionType() {
-  const nzTime = new Date().toLocaleString('en-NZ', { 
+  const nzTime = new Date().toLocaleString('en-NZ', {
     timeZone: 'Pacific/Auckland',
     hour: 'numeric',
-    hour12: false 
+    hour12: false
   });
   const hour = parseInt(nzTime);
-  
-  if (hour >= 5 && hour < 11) return 'morning';
-  if (hour >= 11 && hour < 17) return 'midday';
-  return 'evening';
+
+  if (hour >= 3 && hour < 10) return 'morning';   // 5am check-in
+  if (hour >= 10 && hour < 18) return 'midday';    // 2pm check-in
+  return 'evening';                                  // 9pm check-in
 }
 
 // Sanitize cookies for Playwright compatibility

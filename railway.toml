@@ -8,10 +8,10 @@ dockerfilePath = "Dockerfile"
 [deploy]
 # Cron job mode - runs on schedule, not always-on
 # This keeps costs minimal
-cronSchedule = "0 14,1,8 * * *"  
+cronSchedule = "0 16,1,8 * * *"
 # Runs at:
-#   14:00 UTC = 03:00 NZDT (morning)
-#   01:00 UTC = 14:00 NZDT (midday)  
+#   16:00 UTC = 05:00 NZDT (morning)
+#   01:00 UTC = 14:00 NZDT (midday)
 #   08:00 UTC = 21:00 NZDT (evening)
 
 # Restart policy for cron jobs
