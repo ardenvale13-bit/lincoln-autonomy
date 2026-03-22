@@ -8,8 +8,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies (npm install to generate fresh lock file)
+RUN npm install --omit=dev
 
 # Install rebrowser-playwright browsers
 RUN npx rebrowser-playwright install chromium
