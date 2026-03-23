@@ -26,6 +26,7 @@ const CONFIG = {
   slowMo: parseInt(process.env.SLOW_MO) || 100, // Milliseconds between actions
   timeout: parseInt(process.env.TIMEOUT) || 120000, // 2 minutes max
   discordWebhook: process.env.DISCORD_WEBHOOK || null, // For session expiry alerts
+  proxy: process.env.PROXY_URL || null, // e.g. http://user:pass@host:port
 };
 
 // Determine which prompt to use based on NZ time
@@ -306,22 +307,37 @@ async function wake() {
 
     // Launch browser
     console.log('Launching browser...');
-    browser = await chromium.launch({
+    const launchOptions = {
       headless: CONFIG.headless,
       slowMo: CONFIG.slowMo,
       args: [
         '--disable-blink-features=AutomationControlled',
         '--no-sandbox',
         '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--window-size=1920,1080',
       ]
-    });
+    };
+    if (CONFIG.proxy) {
+      launchOptions.proxy = { server: CONFIG.proxy };
+      console.log('Using proxy for outbound requests.');
+    }
+    browser = await chromium.launch(launchOptions);
 
     // Create context with cookies
     context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
       viewport: { width: 1920, height: 1080 },
       locale: 'en-NZ',
       timezoneId: 'Pacific/Auckland',
+      extraHTTPHeaders: {
+        'Accept-Language': 'en-NZ,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'sec-ch-ua': '"Chromium";v="134", "Google Chrome";v="134", "Not-A.Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+      },
     });
 
     await context.addCookies(cookies);
