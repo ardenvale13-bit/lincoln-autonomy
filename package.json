@@ -9,7 +9,7 @@
     "export-cookies": "node src/export-cookies.js"
   },
   "dependencies": {
-    "rebrowser-playwright": "^1.49.0"
+    "rebrowser-playwright": "^1.52.0"
   },
   "engines": {
     "node": ">=18.0.0"

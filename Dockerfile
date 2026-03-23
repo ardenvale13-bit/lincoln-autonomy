@@ -1,7 +1,7 @@
 # Lincoln Autonomy Service
 # rebrowser-playwright + Chromium for headless Claude.ai automation
 
-FROM mcr.microsoft.com/playwright:v1.49.0-jammy
+FROM mcr.microsoft.com/playwright:v1.52.0-jammy
 
 WORKDIR /app
 
